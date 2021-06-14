@@ -1,0 +1,7 @@
+apiVersion: batch.strng.solutions/v1alpha1
+kind: DaemonJobSet
+metadata:
+  name: daemonjobset-sample
+spec:
+  # Add fields here
+  foo: bar

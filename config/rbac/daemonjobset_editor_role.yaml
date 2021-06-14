@@ -1,0 +1,24 @@
+# permissions for end users to edit daemonjobsets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: daemonjobset-editor-role
+rules:
+- apiGroups:
+  - batch.strng.solutions
+  resources:
+  - daemonjobsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - batch.strng.solutions
+  resources:
+  - daemonjobsets/status
+  verbs:
+  - get

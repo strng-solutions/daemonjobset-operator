@@ -1,0 +1,20 @@
+# permissions for end users to view daemonjobsets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: daemonjobset-viewer-role
+rules:
+- apiGroups:
+  - batch.strng.solutions
+  resources:
+  - daemonjobsets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - batch.strng.solutions
+  resources:
+  - daemonjobsets/status
+  verbs:
+  - get

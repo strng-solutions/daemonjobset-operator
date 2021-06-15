@@ -17,25 +17,57 @@ limitations under the License.
 package v1alpha1
 
 import (
+	batchv1beta1 "k8s.io/api/batch/v1beta1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+type DaemonJobSetPlacement struct {
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty" protobuf:"bytes,7,rep,name=nodeSelector"`
+}
+
+type CronJobTemplateSpec struct {
+	// Standard object's metadata of the cron jobs created from this template.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+	// +optional
+	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
+	// Specification of the desired behavior of the cron job.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+	// +optional
+	Spec batchv1beta1.CronJobSpec `json:"spec,omitempty" protobuf:"bytes,2,opt,name=spec"`
+}
+
 // DaemonJobSetSpec defines the desired state of DaemonJobSet
 type DaemonJobSetSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of DaemonJobSet. Edit daemonjobset_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// +optional
+	Suspend *bool `json:"suspend,omitempty"`
+
+	// +optional
+	Placement DaemonJobSetPlacement `json:"placement,omitempty"`
+
+	CronJobTemplate CronJobTemplateSpec `json:"cronJobTemplate"`
 }
 
 // DaemonJobSetStatus defines the observed state of DaemonJobSet
 type DaemonJobSetStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+
+	// A list of pointers to currently running jobs.
+	// +optional
+	Enabled []v1.ObjectReference `json:"enabled,omitempty" protobuf:"bytes,1,rep,name=enabled"`
+
+	// Information when was the last time the job was successfully scheduled.
+	// +optional
+	//LastScheduleTime *metav1.Time `json:"lastScheduleTime,omitempty" protobuf:"bytes,4,opt,name=lastScheduleTime"`
 }
 
 //+kubebuilder:object:root=true

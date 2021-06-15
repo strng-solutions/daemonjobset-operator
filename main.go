@@ -31,8 +31,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	batchv1alpha1 "github.com/strng.solutions/daemonjobset-operator/api/v1alpha1"
-	"github.com/strng.solutions/daemonjobset-operator/controllers"
+	batchv1alpha1 "github.com/strng-solutions/daemonjobset-operator/api/v1alpha1"
+	"github.com/strng-solutions/daemonjobset-operator/controllers"
 	//+kubebuilder:scaffold:imports
 )
 

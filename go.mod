@@ -1,4 +1,4 @@
-module github.com/strng.solutions/daemonjobset-operator
+module github.com/strng-solutions/daemonjobset-operator
 
 go 1.16
 

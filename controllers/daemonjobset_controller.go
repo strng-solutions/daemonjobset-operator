@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	batchv1alpha1 "github.com/strng.solutions/daemonjobset-operator/api/v1alpha1"
+	batchv1alpha1 "github.com/strng-solutions/daemonjobset-operator/api/v1alpha1"
 )
 
 // DaemonJobSetReconciler reconciles a DaemonJobSet object

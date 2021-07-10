@@ -18,6 +18,7 @@ package main
 
 import (
 	"flag"
+	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -45,6 +46,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(batchv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(batchv1beta1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 

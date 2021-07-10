@@ -20,6 +20,8 @@ import (
 	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -89,6 +91,25 @@ type DaemonJobSetList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []DaemonJobSet `json:"items"`
+}
+
+func (in *DaemonJobSet) GetNodeLabelSelector() (labels.Selector, error) {
+	nodeSelector := labels.NewSelector()
+
+	if len(in.Spec.Placement.NodeSelector) == 0 {
+		nodeSelector = labels.Everything()
+	}
+
+	for nodeLabelName, nodeLabelValue := range in.Spec.Placement.NodeSelector {
+		nodeRequirement, err := labels.NewRequirement(nodeLabelName, selection.Equals, []string{nodeLabelValue})
+		if err != nil {
+			return nil, err
+		}
+
+		nodeSelector = nodeSelector.Add(*nodeRequirement)
+	}
+
+	return nodeSelector, nil
 }
 
 func init() {

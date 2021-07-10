@@ -21,10 +21,9 @@ import (
 	"fmt"
 	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/client-go/tools/reference"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -42,6 +41,11 @@ type DaemonJobSetReconciler struct {
 //+kubebuilder:rbac:groups=batch.strng.solutions,resources=daemonjobsets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=batch.strng.solutions,resources=daemonjobsets/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=batch.strng.solutions,resources=daemonjobsets/finalizers,verbs=update
+//+kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=batch,resources=cronjobs/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=batch,resources=cronjobs/finalizers,verbs=update
+//+kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=nodes/status,verbs=get
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -75,13 +79,10 @@ func (r *DaemonJobSetReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	var enabledCronJobs []*batchv1beta1.CronJob
-	isCronJobEnabled := func(cronJob *batchv1beta1.CronJob) bool {
-		return !*cronJob.Spec.Suspend
-	}
 
-	for i, cronJob := range childCronJobs.Items {
-		if isCronJobEnabled(&cronJob) {
-			enabledCronJobs = append(enabledCronJobs, &childCronJobs.Items[i])
+	for _, cronJob := range childCronJobs.Items {
+		if !*cronJob.Spec.Suspend {
+			enabledCronJobs = append(enabledCronJobs, &cronJob)
 		}
 	}
 
@@ -102,90 +103,113 @@ func (r *DaemonJobSetReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	if daemonJobSet.Spec.Suspend != nil && *daemonJobSet.Spec.Suspend {
-		log.Info("daemonJobSet suspended, skipping")
-		return ctrl.Result{}, nil
-	}
-
-	getNodesForDaemonJobSet := func(daemonJobSet *batchv1alpha1.DaemonJobSet) (*v1.NodeList, error) {
-		var nodeList v1.NodeList
-
-		nodeSelector := labels.NewSelector()
-
-		if len(daemonJobSet.Spec.Placement.NodeSelector) == 0 {
-			nodeSelector = labels.Everything()
-		}
-
-		for nodeLabelName, nodeLabelValue := range daemonJobSet.Spec.Placement.NodeSelector {
-			nodeRequirement, err := labels.NewRequirement(nodeLabelName, selection.Equals, []string{nodeLabelValue})
-			if err != nil {
-				log.Error(err, "unable to create requirement of nodeSelector label definition")
-				continue
-			}
-
-			nodeSelector = nodeSelector.Add(*nodeRequirement)
-		}
-
-		if err := r.List(ctx, &nodeList, client.MatchingLabelsSelector{Selector: nodeSelector}); err != nil {
-			log.Error(err, "unable to list nodes")
-			return nil, err
-		}
-
-		return &nodeList, nil
-	}
-
-	constructCronJobsForDaemonJobSet := func(cronJobTemplate *batchv1alpha1.CronJobTemplateSpec, nodeList *v1.NodeList) ([]*batchv1beta1.CronJob, error) {
-		var cronJobs []*batchv1beta1.CronJob
-		for i, node := range nodeList.Items {
-			cronJobName := fmt.Sprintf("%s-%d", daemonJobSet.Name, i)
-
-			cronJob := &batchv1beta1.CronJob{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels:      make(map[string]string),
-					Annotations: make(map[string]string),
-					Name:        cronJobName,
-					Namespace:   req.Namespace,
-				},
-				Spec: *cronJobTemplate.Spec.DeepCopy(),
-			}
-			for k, v := range cronJobTemplate.Annotations {
-				cronJob.Annotations[k] = v
-			}
-			for k, v := range cronJobTemplate.Labels {
-				cronJob.Labels[k] = v
-			}
-			cronJob.Spec.JobTemplate.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"] = node.Name
-			cronJob.Labels[GroupResource.String()] = req.Name
-
-			cronJobs = append(cronJobs, cronJob)
-		}
-		return cronJobs, nil
-	}
-
-	nodeList, err := getNodesForDaemonJobSet(&daemonJobSet)
+	nodeList, err := r.getNodesForDaemonJobSet(ctx, &daemonJobSet)
 	if err != nil {
 		log.Error(err, "unable to get nodes for DaemonJobSet")
 		return ctrl.Result{}, err
 	}
 
-	cronJobs, err := constructCronJobsForDaemonJobSet(&daemonJobSet.Spec.CronJobTemplate, nodeList)
+	desiredCronJobs, err := r.constructCronJobsForDaemonJobSet(req.Namespace, &daemonJobSet, nodeList)
 	if err != nil {
 		log.Error(err, "unable to construct cronJob from template")
 		return ctrl.Result{}, err
 	}
 
-	for _, cronJob := range cronJobs {
-		if err := ctrl.SetControllerReference(&daemonJobSet, cronJob, r.Scheme); err != nil {
-			log.Error(err, "unable to set controller reference for CronJob")
-		}
+	if err := r.createDesiredCronJobsForDaemonJobSet(ctx, &daemonJobSet, desiredCronJobs); err != nil {
+		log.Error(err, "error creating desired cronjobs")
+		return ctrl.Result{}, err
+	}
 
-		if err := r.Create(ctx, cronJob); err != nil {
-			log.Error(err, "unable to create CronJob for DaemonJobSet", "cronJob", cronJob)
-			return ctrl.Result{}, err
-		}
+	if err := r.updateCronJobsSuspend(ctx, &childCronJobs, daemonJobSet.Spec.Suspend); err != nil {
+		log.Error(err, "error updating CronJobs")
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *DaemonJobSetReconciler) getNodesForDaemonJobSet(ctx context.Context, daemonJobSet *batchv1alpha1.DaemonJobSet) (*v1.NodeList, error) {
+	log := ctrllog.FromContext(ctx)
+
+	var nodeList v1.NodeList
+
+	nodeSelector, err := daemonJobSet.GetNodeLabelSelector()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := r.List(ctx, &nodeList, client.MatchingLabelsSelector{Selector: nodeSelector}); err != nil {
+		log.Error(err, "unable to list nodes")
+		return nil, err
+	}
+
+	return &nodeList, nil
+}
+
+func (r *DaemonJobSetReconciler) constructCronJobsForDaemonJobSet(namespace string, daemonJobSet *batchv1alpha1.DaemonJobSet, nodeList *v1.NodeList) ([]*batchv1beta1.CronJob, error) {
+	cronJobTemplate := &daemonJobSet.Spec.CronJobTemplate
+
+	var cronJobs []*batchv1beta1.CronJob
+
+	for i, node := range nodeList.Items {
+		cronJobName := fmt.Sprintf("%s-%d", daemonJobSet.Name, i)
+
+		cronJob := &batchv1beta1.CronJob{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels:      make(map[string]string),
+				Annotations: make(map[string]string),
+				Name:        cronJobName,
+				Namespace:   namespace,
+			},
+			Spec: *cronJobTemplate.Spec.DeepCopy(),
+		}
+		for k, v := range cronJobTemplate.Annotations {
+			cronJob.Annotations[k] = v
+		}
+		for k, v := range cronJobTemplate.Labels {
+			cronJob.Labels[k] = v
+		}
+		if len(cronJob.Spec.JobTemplate.Spec.Template.Spec.NodeSelector) == 0 {
+			cronJob.Spec.JobTemplate.Spec.Template.Spec.NodeSelector = make(map[string]string)
+		}
+		cronJob.Spec.JobTemplate.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"] = node.Name
+
+		cronJobs = append(cronJobs, cronJob)
+	}
+	return cronJobs, nil
+}
+
+func (r *DaemonJobSetReconciler) createDesiredCronJobsForDaemonJobSet(ctx context.Context, daemonJobSet *batchv1alpha1.DaemonJobSet, desiredCronJobs []*batchv1beta1.CronJob) error {
+	log := ctrllog.FromContext(ctx)
+
+	for _, cronJob := range desiredCronJobs {
+		if err := ctrl.SetControllerReference(daemonJobSet, cronJob, r.Scheme); err != nil {
+			return err
+		}
+
+		if err := r.Create(ctx, cronJob); err != nil && errors.IsAlreadyExists(err) {
+			log.Info("desired CronJob already exists")
+		} else if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (r *DaemonJobSetReconciler) updateCronJobsSuspend(ctx context.Context, childCronJobs *batchv1beta1.CronJobList, suspend *bool) error {
+	for _, childCronJob := range childCronJobs.Items {
+		if &childCronJob.Spec.Suspend == &suspend {
+			continue
+		}
+
+		childCronJob.Spec.Suspend = suspend
+		if err := r.Update(ctx, &childCronJob); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 var (

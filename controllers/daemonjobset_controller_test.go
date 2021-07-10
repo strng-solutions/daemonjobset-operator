@@ -18,7 +18,7 @@ import (
 	//+kubebuilder:scaffold:imports
 )
 
-var _ = Describe("CronJob controller", func() {
+var _ = Describe("DaemonJobSet controller", func() {
 	const (
 		DaemonJobSetName      = "test-daemonjobset"
 		DaemonJobSetNamespace = "default"

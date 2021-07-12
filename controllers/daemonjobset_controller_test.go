@@ -13,6 +13,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/strng-solutions/daemonjobset-operator/api/v1alpha1"
 	//+kubebuilder:scaffold:imports
@@ -24,20 +25,22 @@ var _ = Describe("DaemonJobSet controller", func() {
 		DaemonJobSetNamespace = "default"
 		CronJobName           = "test-daemonjobset-0"
 		CronJobSchedule       = "*/1 * * * *"
+		NodeName              = "test-0"
 
 		timeout  = time.Second * 10
 		duration = time.Second * 10
 		interval = time.Millisecond * 250
 	)
 
-	Context("keeping consistency between CronJobs and DaemonJobSet", func() {
+	Context("keeping consistency of CronJobs", func() {
 		ctx := context.Background()
 
 		daemonJobSetLookupKey := types.NamespacedName{Name: DaemonJobSetName, Namespace: DaemonJobSetNamespace}
 		createdDaemonJobSet := &v1alpha1.DaemonJobSet{}
+		createdCronJob := &batchv1beta1.CronJob{}
 		cronJobLookupKey := types.NamespacedName{Name: CronJobName, Namespace: DaemonJobSetNamespace}
 
-		It("should increase DaemonJobSet Status.Enabled count when new CronJobs are created", func() {
+		It("should increase DaemonJobSet Status.CronJobs len when new CronJobs are created", func() {
 			By("creating a new DaemonJobSet")
 			suspend := new(bool)
 			*suspend = false
@@ -82,24 +85,23 @@ var _ = Describe("DaemonJobSet controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, daemonJobSet)).Should(Succeed())
 
-			Eventually(func() bool {
+			Eventually(func() error {
 				err := k8sClient.Get(ctx, daemonJobSetLookupKey, createdDaemonJobSet)
 				if err != nil {
-					return false
+					return err
 				}
-				return true
-			}, timeout, interval).Should(BeTrue())
+				return nil
+			}, timeout, interval).ShouldNot(HaveOccurred())
+			Expect(*createdDaemonJobSet.Spec.Suspend).To(BeFalse())
 
-			Expect(*createdDaemonJobSet.Spec.Suspend).Should(Equal(false))
-
-			By("checking the DaemonJobSet has zero enabled CronJobs")
+			By("checking the DaemonJobSet has zero child CronJobs")
 			Consistently(func() (int, error) {
 				err := k8sClient.Get(ctx, daemonJobSetLookupKey, createdDaemonJobSet)
 				if err != nil {
 					return -1, err
 				}
-				return len(createdDaemonJobSet.Status.Enabled), nil
-			}, duration, interval).Should(Equal(0))
+				return len(createdDaemonJobSet.Status.CronJobs), nil
+			}, duration, interval).Should(BeZero())
 
 			By("creating a new CronJob")
 			testCronJob := &batchv1beta1.CronJob{
@@ -121,7 +123,7 @@ var _ = Describe("DaemonJobSet controller", func() {
 										},
 									},
 									NodeSelector: map[string]string{
-										"kubernetes.io/hostname": "test-0",
+										"kubernetes.io/hostname": NodeName,
 									},
 									RestartPolicy: v1.RestartPolicyOnFailure,
 								},
@@ -138,7 +140,7 @@ var _ = Describe("DaemonJobSet controller", func() {
 			testCronJob.SetOwnerReferences([]metav1.OwnerReference{*controllerRef})
 			Expect(k8sClient.Create(ctx, testCronJob)).Should(Succeed())
 
-			By("checking that the DaemonJobSet has one active CronJob")
+			By("checking that the DaemonJobSet has one enabled CronJob")
 			Eventually(func() ([]string, error) {
 				err := k8sClient.Get(ctx, daemonJobSetLookupKey, createdDaemonJobSet)
 				if err != nil {
@@ -146,60 +148,118 @@ var _ = Describe("DaemonJobSet controller", func() {
 				}
 
 				names := make([]string, 0)
-				for _, cronJob := range createdDaemonJobSet.Status.Enabled {
+				for _, cronJob := range createdDaemonJobSet.Status.CronJobs {
 					names = append(names, cronJob.Name)
 				}
 				return names, nil
 			}, timeout, interval).Should(ConsistOf(CronJobName), "should list our cronjob %s in the enabled cronjobs list in status", CronJobName)
 		})
 		It("should update CronJobs Spec.Suspend based on DaemonJobSet Spec.Suspend", func() {
-			createdCronJob := &batchv1beta1.CronJob{}
-
-			Eventually(func() bool {
+			By("checking that CronJob is not suspended")
+			Eventually(func() error {
 				err := k8sClient.Get(ctx, cronJobLookupKey, createdCronJob)
 				if err != nil {
-					return false
+					return err
 				}
-				return true
-			}, timeout, interval).Should(BeTrue())
-
-			Expect(*createdCronJob.Spec.Suspend).Should(Equal(false))
+				return nil
+			}, timeout, interval).ShouldNot(HaveOccurred())
+			Expect(*createdCronJob.Spec.Suspend).To(BeFalse())
 
 			By("patching DaemonJobSet with suspend: true")
-			Eventually(func() bool {
-				//suspend := new(bool)
-				//*suspend = true
-				//patch := client.MergeFrom(&v1alpha1.DaemonJobSet{Spec: v1alpha1.DaemonJobSetSpec{Suspend: suspend}})
-
-				*createdDaemonJobSet.Spec.Suspend = true
-				err := k8sClient.Update(ctx, createdDaemonJobSet)
-				if err != nil {
-					return true
-				}
-				return false
-			}, timeout, interval).Should(BeTrue())
-
-			updatedDaemonJobSet := &v1alpha1.DaemonJobSet{}
-
-			By("checking that DaemonJobSet has been suspended")
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, daemonJobSetLookupKey, updatedDaemonJobSet)
-				if err != nil {
-					return false
-				}
-				return true
-			}, timeout, interval).Should(BeTrue())
-			Expect(*updatedDaemonJobSet.Spec.Suspend).Should(Equal(true))
+			*createdDaemonJobSet.Spec.Suspend = true
+			Expect(k8sClient.Update(ctx, createdDaemonJobSet)).NotTo(HaveOccurred())
 
 			By("checking that CronJob has been suspended")
-			Eventually(func() bool {
+			Eventually(func() (bool, error) {
 				err := k8sClient.Get(ctx, cronJobLookupKey, createdCronJob)
 				if err != nil {
-					return false
+					return false, err
 				}
-				return true
+				return *createdCronJob.Spec.Suspend, nil
 			}, timeout, interval).Should(BeTrue())
-			Expect(*createdCronJob.Spec.Suspend).Should(Equal(true))
+
+			By("patching DaemonJobSet with suspend: false")
+			Eventually(func() error {
+				err := k8sClient.Get(ctx, daemonJobSetLookupKey, createdDaemonJobSet)
+				if err != nil {
+					return err
+				}
+				return nil
+			}, timeout, interval).ShouldNot(HaveOccurred())
+			*createdDaemonJobSet.Spec.Suspend = false
+			Expect(k8sClient.Update(ctx, createdDaemonJobSet)).NotTo(HaveOccurred())
+
+			By("checking that CronJob is not suspended anymore")
+			Eventually(func() (bool, error) {
+				err := k8sClient.Get(ctx, cronJobLookupKey, createdCronJob)
+				if err != nil {
+					return false, err
+				}
+				return *createdCronJob.Spec.Suspend, nil
+			}, timeout, interval).Should(BeFalse()) //could be wrong for error case
+		})
+		It("should decrease DaemonJobSet Status.CronJobs len when CronJob are deleted", func() {
+			By("checking that CronJob is present")
+			Consistently(func() error {
+				err := k8sClient.Get(ctx, cronJobLookupKey, createdCronJob)
+				if err != nil {
+					return err
+				}
+				return nil
+			}, duration, interval).ShouldNot(HaveOccurred())
+
+			By("removing CronJob")
+			Consistently(func() error {
+				deletePolicy := metav1.DeletePropagationForeground
+				err := k8sClient.Delete(ctx, createdCronJob, &client.DeleteOptions{PropagationPolicy: &deletePolicy})
+				if err != nil {
+					return err
+				}
+				return nil
+			}, duration, interval).ShouldNot(HaveOccurred())
+
+			By("checking the CronJob does not exist")
+			Eventually(func() error {
+				err := k8sClient.Get(ctx, cronJobLookupKey, createdCronJob)
+				if err != nil {
+					return err
+				}
+				return nil
+			}, timeout, interval).Should(HaveOccurred())
+
+			By("checking the DaemonJobSet has zero child CronJobs")
+			Eventually(func() (int, error) {
+				err := k8sClient.Get(ctx, daemonJobSetLookupKey, createdDaemonJobSet)
+				if err != nil {
+					return -1, err
+				}
+				return len(createdDaemonJobSet.Status.CronJobs), nil
+			}, timeout, interval).Should(BeZero())
+		})
+		It("should create CronJob when new node was added", func() {
+			By("creating a new Node")
+			testNode := &v1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: NodeName,
+					Labels: map[string]string{
+						"beta.kubernetes.io/os":  "linux",
+						"kubernetes.io/hostname": NodeName,
+					},
+				},
+				Spec: v1.NodeSpec{},
+			}
+			Expect(k8sClient.Create(ctx, testNode)).NotTo(HaveOccurred())
+
+			By("checking that CronJob has been created")
+			Eventually(func() error {
+				err := k8sClient.Get(ctx, cronJobLookupKey, createdCronJob)
+				if err != nil {
+					return err
+				}
+				return nil
+			}, timeout, interval).ShouldNot(HaveOccurred())
+			Expect(*createdCronJob.Spec.Suspend).To(Equal(false))
+			Expect(createdCronJob.Spec.JobTemplate.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"]).To(Equal(NodeName))
 		})
 	})
 

@@ -64,7 +64,7 @@ type DaemonJobSetStatus struct {
 
 	// A list of pointers to currently running jobs.
 	// +optional
-	Enabled []v1.ObjectReference `json:"enabled,omitempty" protobuf:"bytes,1,rep,name=enabled"`
+	CronJobs []v1.ObjectReference `json:"cronjobs,omitempty" protobuf:"bytes,1,rep,name=cronjobs"`
 
 	// Information when was the last time the job was successfully scheduled.
 	// +optional

@@ -78,25 +78,17 @@ func (r *DaemonJobSetReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	var enabledCronJobs []*batchv1beta1.CronJob
+	log.Info("cronjobs count", "child CronJobs", len(childCronJobs.Items))
 
-	for _, cronJob := range childCronJobs.Items {
-		if !*cronJob.Spec.Suspend {
-			enabledCronJobs = append(enabledCronJobs, &cronJob)
-		}
-	}
-
-	daemonJobSet.Status.Enabled = nil
-	for _, enabledCronJob := range enabledCronJobs {
-		cronJobRef, err := reference.GetReference(r.Scheme, enabledCronJob)
+	daemonJobSet.Status.CronJobs = nil
+	for _, childCronJob := range childCronJobs.Items {
+		cronJobRef, err := reference.GetReference(r.Scheme, &childCronJob)
 		if err != nil {
-			log.Error(err, "unable to make reference to enabled cronjob", "cronjob", enabledCronJob)
+			log.Error(err, "unable to make reference to enabled cronjob", "cronjob", childCronJob)
 			continue
 		}
-		daemonJobSet.Status.Enabled = append(daemonJobSet.Status.Enabled, *cronJobRef)
+		daemonJobSet.Status.CronJobs = append(daemonJobSet.Status.CronJobs, *cronJobRef)
 	}
-
-	log.Info("cronjob count", "enabled cronjob", len(enabledCronJobs))
 
 	if err := r.Status().Update(ctx, &daemonJobSet); err != nil {
 		log.Error(err, "unable to update DaemonJobSet status")

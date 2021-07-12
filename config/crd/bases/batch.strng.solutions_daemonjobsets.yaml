@@ -8064,7 +8064,7 @@ spec:
           status:
             description: DaemonJobSetStatus defines the observed state of DaemonJobSet
             properties:
-              enabled:
+              cronjobs:
                 description: A list of pointers to currently running jobs.
                 items:
                   description: 'ObjectReference contains enough information to let

@@ -24,24 +24,23 @@ import (
 	"k8s.io/apimachinery/pkg/selection"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 type DaemonJobSetPlacement struct {
 	// +optional
-	NodeSelector map[string]string `json:"nodeSelector,omitempty" protobuf:"bytes,7,rep,name=nodeSelector"`
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 }
 
 type CronJobTemplateSpec struct {
 	// Standard object's metadata of the cron jobs created from this template.
 	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	// +optional
-	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	// Specification of the desired behavior of the cron job.
 	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 	// +optional
-	Spec batchv1beta1.CronJobSpec `json:"spec,omitempty" protobuf:"bytes,2,opt,name=spec"`
+	Spec batchv1beta1.CronJobSpec `json:"spec,omitempty"`
 }
 
 // DaemonJobSetSpec defines the desired state of DaemonJobSet
@@ -65,7 +64,7 @@ type DaemonJobSetStatus struct {
 
 	// A list of pointers to currently running jobs.
 	// +optional
-	Enabled []v1.ObjectReference `json:"enabled,omitempty" protobuf:"bytes,1,rep,name=enabled"`
+	CronJobs []v1.ObjectReference `json:"cronjobs,omitempty"`
 
 	// Information when was the last time the job was successfully scheduled.
 	// +optional

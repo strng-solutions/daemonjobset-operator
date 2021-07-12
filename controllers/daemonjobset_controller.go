@@ -19,15 +19,26 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"reflect"
+
+	"k8s.io/client-go/tools/reference"
+
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+
 	batchv1beta1 "k8s.io/api/batch/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/reference"
+
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	batchv1alpha1 "github.com/strng-solutions/daemonjobset-operator/api/v1alpha1"
 )
@@ -60,8 +71,8 @@ func (r *DaemonJobSetReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	log := ctrllog.FromContext(ctx)
 
 	// Fetch the DaemonJobSet instance
-	var daemonJobSet batchv1alpha1.DaemonJobSet
-	if err := r.Get(ctx, req.NamespacedName, &daemonJobSet); err != nil {
+	daemonJobSet := &batchv1alpha1.DaemonJobSet{}
+	if err := r.Get(ctx, req.NamespacedName, daemonJobSet); err != nil {
 		log.Error(err, "unable to fetch DaemonJobSet")
 		// we'll ignore not-found errors, since they can't be fixed by an immediate
 		// requeue (we'll need to wait for a new notification), and we can get them
@@ -69,8 +80,8 @@ func (r *DaemonJobSetReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	var childCronJobs batchv1beta1.CronJobList
-	if err := r.List(ctx, &childCronJobs,
+	childCronJobs := &batchv1beta1.CronJobList{}
+	if err := r.List(ctx, childCronJobs,
 		client.InNamespace(req.Namespace),
 		client.MatchingFields{cronJobOwnerKey: req.Name},
 	); err != nil {
@@ -78,41 +89,43 @@ func (r *DaemonJobSetReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	log.Info("cronjobs count", "child CronJobs", len(childCronJobs.Items))
-
-	daemonJobSet.Status.CronJobs = nil
+	var cronJobs []v1.ObjectReference
 	for _, childCronJob := range childCronJobs.Items {
 		cronJobRef, err := reference.GetReference(r.Scheme, &childCronJob)
 		if err != nil {
-			log.Error(err, "unable to make reference to enabled cronjob", "cronjob", childCronJob)
+			log.Error(err, "unable to make reference to cronjob", "cronjob", childCronJob)
 			continue
 		}
-		daemonJobSet.Status.CronJobs = append(daemonJobSet.Status.CronJobs, *cronJobRef)
+		cronJobs = append(cronJobs, *cronJobRef)
 	}
 
-	if err := r.Status().Update(ctx, &daemonJobSet); err != nil {
-		log.Error(err, "unable to update DaemonJobSet status")
-		return ctrl.Result{}, err
+	if !reflect.DeepEqual(cronJobs, daemonJobSet.Status.CronJobs) {
+		daemonJobSet.Status.CronJobs = cronJobs
+		if err := r.Status().Update(ctx, daemonJobSet); err != nil {
+			log.Error(err, "unable to update DaemonJobSet status")
+			return ctrl.Result{}, err
+		}
+		log.Info("updated successfully", "cronjobs count", len(daemonJobSet.Status.CronJobs))
 	}
 
-	nodeList, err := r.getNodesForDaemonJobSet(ctx, &daemonJobSet)
+	nodeList, err := r.getNodesForDaemonJobSet(ctx, daemonJobSet)
 	if err != nil {
 		log.Error(err, "unable to get nodes for DaemonJobSet")
 		return ctrl.Result{}, err
 	}
 
-	desiredCronJobs, err := r.constructCronJobsForDaemonJobSet(req.Namespace, &daemonJobSet, nodeList)
+	desiredCronJobs, err := r.constructCronJobsForDaemonJobSet(req.Namespace, daemonJobSet, nodeList)
 	if err != nil {
 		log.Error(err, "unable to construct cronJob from template")
 		return ctrl.Result{}, err
 	}
 
-	if err := r.createDesiredCronJobsForDaemonJobSet(ctx, &daemonJobSet, desiredCronJobs); err != nil {
+	if err := r.createDesiredCronJobsForDaemonJobSet(ctx, daemonJobSet, desiredCronJobs); err != nil {
 		log.Error(err, "error creating desired cronjobs")
 		return ctrl.Result{}, err
 	}
 
-	if err := r.updateCronJobsSuspend(ctx, &childCronJobs, daemonJobSet.Spec.Suspend); err != nil {
+	if err := r.updateCronJobsSuspend(ctx, childCronJobs, daemonJobSet.Spec.Suspend); err != nil {
 		log.Error(err, "error updating CronJobs")
 		return ctrl.Result{}, err
 	}
@@ -209,6 +222,33 @@ var (
 	apiGVStr        = batchv1alpha1.GroupVersion.String()
 )
 
+func (r *DaemonJobSetReconciler) ObjectToCRMapper(obj runtime.Object) (handler.MapFunc, error) {
+	gvk, err := apiutil.GVKForObject(obj, r.Scheme)
+	if err != nil {
+		return nil, err
+	}
+
+	return func(o client.Object) []ctrl.Request {
+		list := &unstructured.UnstructuredList{}
+		list.SetGroupVersionKind(gvk)
+		err := r.Client.List(context.TODO(), list)
+		if err != nil {
+			return nil
+		}
+
+		results := []ctrl.Request{}
+		for _, obj := range list.Items {
+			results = append(results, ctrl.Request{
+				NamespacedName: client.ObjectKey{
+					Namespace: obj.GetNamespace(),
+					Name:      obj.GetName(),
+				},
+			})
+		}
+		return results
+	}, nil
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *DaemonJobSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &batchv1beta1.CronJob{}, cronJobOwnerKey, func(rawObj client.Object) []string {
@@ -225,8 +265,14 @@ func (r *DaemonJobSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	handlerFunc, err := r.ObjectToCRMapper(&batchv1alpha1.DaemonJobSetList{})
+	if err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&batchv1alpha1.DaemonJobSet{}).
+		Watches(&source.Kind{Type: &corev1.Node{}}, handler.EnqueueRequestsFromMapFunc(handlerFunc)).
 		Owns(&batchv1beta1.CronJob{}).
 		Complete(r)
 }

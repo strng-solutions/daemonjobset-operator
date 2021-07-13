@@ -23,7 +23,6 @@ import (
 
 	"k8s.io/client-go/tools/reference"
 
-	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	batchv1beta1 "k8s.io/api/batch/v1beta1"
@@ -32,7 +31,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -220,59 +218,55 @@ func (r *DaemonJobSetReconciler) updateCronJobsSuspend(ctx context.Context, chil
 var (
 	cronJobOwnerKey = ".metadata.controller"
 	apiGVStr        = batchv1alpha1.GroupVersion.String()
+	kind            = reflect.TypeOf(batchv1alpha1.DaemonJobSet{}).Name()
+	gvk             = batchv1alpha1.GroupVersion.WithKind(kind)
 )
 
-func (r *DaemonJobSetReconciler) ObjectToCRMapper(obj runtime.Object) (handler.MapFunc, error) {
-	gvk, err := apiutil.GVKForObject(obj, r.Scheme)
+func (r *DaemonJobSetReconciler) indexCronJobOwnerField(rawObj client.Object) []string {
+	cronJob := rawObj.(*batchv1beta1.CronJob)
+	owner := metav1.GetControllerOf(cronJob)
+	if owner == nil {
+		return nil
+	}
+	if owner.APIVersion != apiGVStr || owner.Kind != kind {
+		return nil
+	}
+	return []string{owner.Name}
+}
+
+func (r *DaemonJobSetReconciler) mapToDaemonJobSet(_ client.Object) []ctrl.Request {
+	ctx := context.Background()
+	log := ctrllog.FromContext(ctx)
+	daemonJobSetList := &batchv1alpha1.DaemonJobSetList{}
+	err := r.Client.List(ctx, daemonJobSetList)
 	if err != nil {
-		return nil, err
+		if client.IgnoreNotFound(err) != nil {
+			log.Error(err, "error getting list of DaemonJobSet")
+		}
+		return nil
 	}
 
-	return func(o client.Object) []ctrl.Request {
-		list := &unstructured.UnstructuredList{}
-		list.SetGroupVersionKind(gvk)
-		err := r.Client.List(context.TODO(), list)
-		if err != nil {
-			return nil
-		}
-
-		results := []ctrl.Request{}
-		for _, obj := range list.Items {
-			results = append(results, ctrl.Request{
-				NamespacedName: client.ObjectKey{
-					Namespace: obj.GetNamespace(),
-					Name:      obj.GetName(),
-				},
-			})
-		}
-		return results
-	}, nil
+	var results []ctrl.Request
+	for _, daemonJobSet := range daemonJobSetList.Items {
+		results = append(results, ctrl.Request{
+			NamespacedName: client.ObjectKey{
+				Namespace: daemonJobSet.GetNamespace(),
+				Name:      daemonJobSet.GetName(),
+			},
+		})
+	}
+	return results
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *DaemonJobSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &batchv1beta1.CronJob{}, cronJobOwnerKey, func(rawObj client.Object) []string {
-		cronJob := rawObj.(*batchv1beta1.CronJob)
-		owner := metav1.GetControllerOf(cronJob)
-		if owner == nil {
-			return nil
-		}
-		if owner.APIVersion != apiGVStr || owner.Kind != "DaemonJobSet" {
-			return nil
-		}
-		return []string{owner.Name}
-	}); err != nil {
-		return err
-	}
-
-	handlerFunc, err := r.ObjectToCRMapper(&batchv1alpha1.DaemonJobSetList{})
-	if err != nil {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &batchv1beta1.CronJob{}, cronJobOwnerKey, r.indexCronJobOwnerField); err != nil {
 		return err
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&batchv1alpha1.DaemonJobSet{}).
-		Watches(&source.Kind{Type: &corev1.Node{}}, handler.EnqueueRequestsFromMapFunc(handlerFunc)).
+		Watches(&source.Kind{Type: &corev1.Node{}}, handler.EnqueueRequestsFromMapFunc(r.mapToDaemonJobSet)).
 		Owns(&batchv1beta1.CronJob{}).
 		Complete(r)
 }

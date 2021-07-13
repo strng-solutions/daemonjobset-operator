@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"context"
-	"reflect"
 	"time"
 
 	. "github.com/onsi/ginkgo"
@@ -15,17 +14,17 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/strng-solutions/daemonjobset-operator/api/v1alpha1"
+	batchv1alpha1 "github.com/strng-solutions/daemonjobset-operator/api/v1alpha1"
 	//+kubebuilder:scaffold:imports
 )
 
 var _ = Describe("DaemonJobSet controller", func() {
 	const (
-		DaemonJobSetName      = "test-daemonjobset"
-		DaemonJobSetNamespace = "default"
-		CronJobName           = "test-daemonjobset-0"
-		CronJobSchedule       = "*/1 * * * *"
-		NodeName              = "test-0"
+		Namespace        = "default"
+		DaemonJobSetName = "test-daemonjobset"
+		CronJobName      = "test-daemonjobset-0"
+		CronJobSchedule  = "*/1 * * * *"
+		NodeName         = "test-0"
 
 		timeout  = time.Second * 10
 		duration = time.Second * 10
@@ -35,32 +34,32 @@ var _ = Describe("DaemonJobSet controller", func() {
 	Context("keeping consistency of CronJobs", func() {
 		ctx := context.Background()
 
-		daemonJobSetLookupKey := types.NamespacedName{Name: DaemonJobSetName, Namespace: DaemonJobSetNamespace}
-		createdDaemonJobSet := &v1alpha1.DaemonJobSet{}
+		daemonJobSetLookupKey := types.NamespacedName{Name: DaemonJobSetName, Namespace: Namespace}
+		createdDaemonJobSet := &batchv1alpha1.DaemonJobSet{}
+		cronJobLookupKey := types.NamespacedName{Name: CronJobName, Namespace: Namespace}
 		createdCronJob := &batchv1beta1.CronJob{}
-		cronJobLookupKey := types.NamespacedName{Name: CronJobName, Namespace: DaemonJobSetNamespace}
 
 		It("should increase DaemonJobSet Status.CronJobs len when new CronJobs are created", func() {
 			By("creating a new DaemonJobSet")
 			suspend := new(bool)
 			*suspend = false
-			daemonJobSet := &v1alpha1.DaemonJobSet{
+			daemonJobSet := &batchv1alpha1.DaemonJobSet{
 				TypeMeta: metav1.TypeMeta{
 					APIVersion: "batch.strng.solutions/v1alpha1",
 					Kind:       "DaemonJobSet",
 				},
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      DaemonJobSetName,
-					Namespace: DaemonJobSetNamespace,
+					Namespace: Namespace,
 				},
-				Spec: v1alpha1.DaemonJobSetSpec{
+				Spec: batchv1alpha1.DaemonJobSetSpec{
 					Suspend: suspend,
-					Placement: v1alpha1.DaemonJobSetPlacement{
+					Placement: batchv1alpha1.DaemonJobSetPlacement{
 						NodeSelector: map[string]string{
 							"beta.kubernetes.io/os": "linux",
 						},
 					},
-					CronJobTemplate: v1alpha1.CronJobTemplateSpec{
+					CronJobTemplate: batchv1alpha1.CronJobTemplateSpec{
 						Spec: batchv1beta1.CronJobSpec{
 							Schedule: CronJobSchedule,
 							JobTemplate: batchv1beta1.JobTemplateSpec{
@@ -85,6 +84,7 @@ var _ = Describe("DaemonJobSet controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, daemonJobSet)).Should(Succeed())
 
+			By("checking the DaemonJobSet has been created")
 			Eventually(func() error {
 				err := k8sClient.Get(ctx, daemonJobSetLookupKey, createdDaemonJobSet)
 				if err != nil {
@@ -107,7 +107,7 @@ var _ = Describe("DaemonJobSet controller", func() {
 			testCronJob := &batchv1beta1.CronJob{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      CronJobName,
-					Namespace: DaemonJobSetNamespace,
+					Namespace: Namespace,
 				},
 				Spec: batchv1beta1.CronJobSpec{
 					Schedule: CronJobSchedule,
@@ -132,9 +132,6 @@ var _ = Describe("DaemonJobSet controller", func() {
 					},
 				},
 			}
-
-			kind := reflect.TypeOf(v1alpha1.DaemonJobSet{}).Name()
-			gvk := v1alpha1.GroupVersion.WithKind(kind)
 
 			controllerRef := metav1.NewControllerRef(createdDaemonJobSet, gvk)
 			testCronJob.SetOwnerReferences([]metav1.OwnerReference{*controllerRef})
@@ -232,7 +229,7 @@ var _ = Describe("DaemonJobSet controller", func() {
 
 			By("checking the DaemonJobSet has zero child CronJobs")
 			Eventually(func() (int, error) {
-				emptyDaemonJobSet := &v1alpha1.DaemonJobSet{}
+				emptyDaemonJobSet := &batchv1alpha1.DaemonJobSet{}
 				err := k8sClient.Get(ctx, daemonJobSetLookupKey, emptyDaemonJobSet)
 				if err != nil {
 					return -1, err

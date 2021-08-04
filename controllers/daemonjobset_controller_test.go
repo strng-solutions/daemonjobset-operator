@@ -38,6 +38,8 @@ var _ = Describe("DaemonJobSet controller", func() {
 		createdDaemonJobSet := &batchv1alpha1.DaemonJobSet{}
 		cronJobLookupKey := types.NamespacedName{Name: CronJobName, Namespace: Namespace}
 		createdCronJob := &batchv1beta1.CronJob{}
+		testNode := &v1.Node{}
+		nodeCreatedCronJob := &batchv1beta1.CronJob{}
 
 		It("should increase DaemonJobSet Status.CronJobs len when new CronJobs are created", func() {
 			By("creating a new DaemonJobSet")
@@ -239,7 +241,7 @@ var _ = Describe("DaemonJobSet controller", func() {
 		})
 		It("should create CronJob when new node was added", func() {
 			By("creating a new Node")
-			testNode := &v1.Node{
+			testNode = &v1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: NodeName,
 					Labels: map[string]string{
@@ -252,7 +254,6 @@ var _ = Describe("DaemonJobSet controller", func() {
 			Expect(k8sClient.Create(ctx, testNode)).NotTo(HaveOccurred())
 
 			By("checking that CronJob has been created")
-			nodeCreatedCronJob := &batchv1beta1.CronJob{}
 			Eventually(func() error {
 				err := k8sClient.Get(ctx, cronJobLookupKey, nodeCreatedCronJob)
 				if err != nil {
@@ -262,6 +263,19 @@ var _ = Describe("DaemonJobSet controller", func() {
 			}, timeout, interval).ShouldNot(HaveOccurred())
 			Expect(*nodeCreatedCronJob.Spec.Suspend).To(Equal(false))
 			Expect(nodeCreatedCronJob.Spec.JobTemplate.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"]).To(Equal(NodeName))
+		})
+		It("should delete CronJob when node was deleted", func() {
+			By("deleting thee node")
+			Expect(k8sClient.Delete(ctx, testNode)).NotTo(HaveOccurred())
+
+			By("checking that CronJob has been deleted")
+			Eventually(func() error {
+				err := k8sClient.Get(ctx, cronJobLookupKey, nodeCreatedCronJob)
+				if err != nil {
+					return err
+				}
+				return nil
+			}, timeout, interval).Should(HaveOccurred())
 		})
 	})
 

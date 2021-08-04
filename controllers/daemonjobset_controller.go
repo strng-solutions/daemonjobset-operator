@@ -119,12 +119,17 @@ func (r *DaemonJobSetReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if err := r.createDesiredCronJobsForDaemonJobSet(ctx, daemonJobSet, desiredCronJobs); err != nil {
-		log.Error(err, "error creating desired cronjobs")
+		log.Error(err, "error creating desired CronJobs")
 		return ctrl.Result{}, err
 	}
 
 	if err := r.updateCronJobsSuspend(ctx, childCronJobs, daemonJobSet.Spec.Suspend); err != nil {
 		log.Error(err, "error updating CronJobs")
+		return ctrl.Result{}, err
+	}
+
+	if err := r.deleteCronJobs(ctx, childCronJobs, desiredCronJobs); err != nil {
+		log.Error(err, "error deleting CronJobs")
 		return ctrl.Result{}, err
 	}
 
@@ -212,6 +217,26 @@ func (r *DaemonJobSetReconciler) updateCronJobsSuspend(ctx context.Context, chil
 		}
 	}
 
+	return nil
+}
+
+func hasElement(slice []*batchv1beta1.CronJob, element interface{}) bool {
+	for _, el := range slice {
+		if reflect.DeepEqual(el, element) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *DaemonJobSetReconciler) deleteCronJobs(ctx context.Context, childCronJobs *batchv1beta1.CronJobList, desiredCronJobs []*batchv1beta1.CronJob) error {
+	for _, childCronJob := range childCronJobs.Items {
+		if !hasElement(desiredCronJobs, childCronJob) {
+			if err := r.Delete(ctx, &childCronJob); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
